@@ -55,13 +55,15 @@ Shader "HiZ/InstanceGrass"
             Varyings vert (Attributes v, uint instanceID : SV_InstanceID)
             {
                 Varyings o;
-                unity_ObjectToWorld = positionBuffer[instanceID];
-                unity_WorldToObject = unity_ObjectToWorld;
-                //unity_WorldToObject._14_24_34 *= -1;
-				//unity_WorldToObject._11_22_33 = 1.0f / unity_WorldToObject._11_22_33;
-                o.positionWS = mul(unity_ObjectToWorld, v.positionOS).xyz;
-                o.positionCS = mul(unity_MatrixVP, float4(o.positionWS, 1.0));
+                #if SHADER_TARGET >= 45
+                    float4x4 data = positionBuffer[instanceID];
+                #else
+                    float4x4 data = 0;
+                #endif
+                o.positionWS = mul(data, v.positionOS).xyz;
+                o.positionCS = mul(UNITY_MATRIX_VP, float4(o.positionWS, 1.0));
                 o.color = v.color;
+                o.texcoord = v.texcoord;
                 return o;
             }
 
