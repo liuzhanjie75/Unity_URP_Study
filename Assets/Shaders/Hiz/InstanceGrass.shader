@@ -56,7 +56,7 @@ Shader "HiZ/InstanceGrass"
             {
                 Varyings o;
                 unity_ObjectToWorld = positionBuffer[instanceID];
-                //unity_WorldToObject = unity_ObjectToWorld;
+                unity_WorldToObject = unity_ObjectToWorld;
                 //unity_WorldToObject._14_24_34 *= -1;
 				//unity_WorldToObject._11_22_33 = 1.0f / unity_WorldToObject._11_22_33;
                 o.positionWS = mul(unity_ObjectToWorld, v.positionOS).xyz;

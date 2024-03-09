@@ -6,18 +6,30 @@ public class GrassGenerator : MonoBehaviour
     public Material GrassMeshMaterial;
     public int SubMeshIndex = 0;
     public int GrassCountPerRaw = 300;
+    public ComputeShader compute;
     
     private int _grassCount;
     private const float Range = 100f;
     private ComputeBuffer _grassMatrixBuffer;
+    private ComputeBuffer _cullResultBuffer;
+    
+    private int _kernel;
     
     private int cachedInstanceCount = -1;
     private int cachedSubMeshIndex = -1;
     private ComputeBuffer argsBuffer;
     private uint[] args = new uint[5] { 0, 0, 0, 0, 0 };
+
     
     
     private static readonly int PositionBuffer = Shader.PropertyToID("positionBuffer");
+    private static readonly int GrassCount = Shader.PropertyToID("grassCount");
+    private static readonly int IsOpenGL = Shader.PropertyToID("isOpenGL");
+    private static readonly int GrassMatrixBuffer = Shader.PropertyToID("grassMatrixBuffer");
+    private static readonly int VPMatrixId = Shader.PropertyToID("vpMatrix");
+    private static readonly int CullResultBufferId = Shader.PropertyToID("cullResultBuffer");
+    private static readonly int BoundsMax = Shader.PropertyToID("boundsMax");
+    private static readonly int BoundsMin = Shader.PropertyToID("boundsMin");
 
 
     // Start is called before the first frame update
@@ -27,17 +39,63 @@ public class GrassGenerator : MonoBehaviour
 
         InitComputeBuffer();
         InitGrassPosition();
+        InitComputeShader();
     }
 
     // Update is called once per frame
     void Update()
     {
+        var main = Camera.main;
+        if (main == null)
+            return;
+
+        var matrix = GL.GetGPUProjectionMatrix(main.projectionMatrix, false) * main.worldToCameraMatrix;
+        compute.SetMatrix(VPMatrixId, matrix);
+        _cullResultBuffer.SetCounterValue(0);
+        compute.SetBuffer(_kernel, CullResultBufferId, _cullResultBuffer);
+        compute.Dispatch(_kernel, 1 + _grassCount / 1024, 1, 1);
         
-        GrassMeshMaterial.SetBuffer(PositionBuffer, _grassMatrixBuffer);
+        GrassMeshMaterial.SetBuffer(PositionBuffer, _cullResultBuffer);
+        ComputeBuffer.CopyCount(_cullResultBuffer, argsBuffer, sizeof(uint));
+        argsBuffer.GetData(args);
+        
         Graphics.DrawMeshInstancedIndirect(GrassMesh, SubMeshIndex, GrassMeshMaterial, new Bounds(Vector3.zero, Vector3.one * Range), argsBuffer);
     }
-    
 
+    void OnDisable() 
+    {
+        _grassMatrixBuffer?.Release();
+        _grassMatrixBuffer = null;
+
+        _cullResultBuffer?.Release();
+        _cullResultBuffer = null;
+
+        argsBuffer?.Release();
+        argsBuffer = null;
+    }
+
+    private void InitComputeShader()
+    {
+        var main = Camera.main;
+        if (main == null)
+            return;
+        
+        _kernel = compute.FindKernel("GrassCulling");
+        compute.SetInt(GrassCount, _grassCount);
+        var opengl = main.projectionMatrix.Equals(GL.GetGPUProjectionMatrix(main.projectionMatrix, false));
+        compute.SetBool(IsOpenGL, opengl);
+        compute.SetBuffer(_kernel, GrassMatrixBuffer, _grassMatrixBuffer);
+
+        var o = new GameObject();
+        var meshCollider = o.AddComponent<MeshCollider>();
+        meshCollider.sharedMesh = GrassMesh;
+        var bounds = meshCollider.bounds;
+        compute.SetVector(BoundsMax, bounds.max);
+        compute.SetVector(BoundsMin, bounds.min);
+        o.SetActive(false);
+        GameObject.DestroyImmediate(o);
+    }
+    
     private void InitComputeBuffer()
     {
         argsBuffer = new ComputeBuffer(1, args.Length * sizeof(uint), ComputeBufferType.IndirectArguments);
@@ -49,6 +107,7 @@ public class GrassGenerator : MonoBehaviour
         argsBuffer.SetData(args);
         
         _grassMatrixBuffer = new ComputeBuffer(_grassCount, sizeof(float) * 16);
+        _cullResultBuffer = new ComputeBuffer(_grassCount, sizeof(float) * 16, ComputeBufferType.Append);
     }
 
     private void InitGrassPosition()

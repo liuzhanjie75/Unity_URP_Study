@@ -1,0 +1,77 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel GrassCulling
+
+bool isOpenGL;
+uint grassCount;
+float3 boundsMin;
+float3 boundsMax;
+float4x4 vpMatrix;
+StructuredBuffer<float4x4> grassMatrixBuffer;
+
+AppendStructuredBuffer<float4x4> cullResultBuffer;
+
+// static float3 boundsMin = float3(-0.2f, 0.0f, -0.3f);
+// static float3 boundsMax = float3(0.2f, 0.5f, 0.3f);
+
+//在Clip Space下，根据齐次坐标做Clipping操作
+bool IsInClipSpace(float4 clipSpacePosition)
+{
+    if (isOpenGL)
+        return clipSpacePosition.x > -clipSpacePosition.w && clipSpacePosition.x < clipSpacePosition.w &&
+            clipSpacePosition.y > -clipSpacePosition.w && clipSpacePosition.y < clipSpacePosition.w &&
+            clipSpacePosition.z > -clipSpacePosition.w && clipSpacePosition.z < clipSpacePosition.w;
+    
+    return clipSpacePosition.x > -clipSpacePosition.w && clipSpacePosition.x < clipSpacePosition.w &&
+        clipSpacePosition.y > -clipSpacePosition.w && clipSpacePosition.y < clipSpacePosition.w &&
+        clipSpacePosition.z > 0 && clipSpacePosition.z < clipSpacePosition.w;
+}
+
+[numthreads(1024,1,1)]
+void GrassCulling(uint3 id : SV_DispatchThreadID)
+{
+    // TODO: insert actual code here!
+
+    if (id.x >= grassCount)
+        return;
+
+    //单个草从View Space变换到World Space的矩阵，即M矩阵
+    float4x4 grassMatrix = grassMatrixBuffer[id.x];
+    //得到单个草的mvp矩阵
+    float4x4 mvpMatrix = mul(vpMatrix, grassMatrix);
+
+    //包围盒的8个顶点的View Space坐标
+    float4 boundVerts[8];
+    boundVerts[0] = float4(boundsMin, 1);
+    boundVerts[1] = float4(boundsMax, 1);
+    boundVerts[2] = float4(boundsMax.x, boundsMax.y, boundsMin.z, 1);
+    boundVerts[3] = float4(boundsMax.x, boundsMin.y, boundsMax.z, 1);
+    boundVerts[4] = float4(boundsMax.x, boundsMin.y, boundsMin.z, 1);
+    boundVerts[5] = float4(boundsMin.x, boundsMax.y, boundsMax.z, 1);
+    boundVerts[6] = float4(boundsMin.x, boundsMax.y, boundsMin.z, 1);
+    boundVerts[7] = float4(boundsMin.x, boundsMin.y, boundsMax.z, 1);
+
+    float minX = 1, minY = 1, minZ = 1, maxX = -1, maxY = -1, maxZ = -1;
+
+    //-------------------------------------------------------视椎剔除-------------------------------------------------------
+    //通过mvp矩阵得到顶点的Clip Space的齐次坐标，然后在Clip Space做视椎剔除判断，所有点都不在NDC内就被剔除。
+    bool isInClipSpace = false;
+    for (int i = 0; i < 8; i++)
+    {
+        float4 clipSpace = mul(mvpMatrix, boundVerts[i]);
+        if (!isInClipSpace && IsInClipSpace(clipSpace))
+            isInClipSpace = true;
+
+        //计算该草ndc下的AABB
+        float3 ndc = clipSpace.xyz / clipSpace.w;
+        if (minX > ndc.x) minX = ndc.x;
+        if (minY > ndc.y) minY = ndc.y;
+        if (minZ > ndc.z) minZ = ndc.z;
+        if (maxX < ndc.x) maxX = ndc.x;
+        if (maxY < ndc.y) maxY = ndc.y;
+        if (maxZ < ndc.z) maxZ = ndc.z;
+    }
+    if (!isInClipSpace)
+        return;
+
+    cullResultBuffer.Append(grassMatrix);
+}
