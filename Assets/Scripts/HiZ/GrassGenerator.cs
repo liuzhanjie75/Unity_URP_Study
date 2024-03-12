@@ -7,6 +7,7 @@ public class GrassGenerator : MonoBehaviour
     public int SubMeshIndex = 0;
     public int GrassCountPerRaw = 300;
     public ComputeShader compute;
+    public DepthTextureGenerator depthTextureGenerator;
     
     private int _grassCount;
     private const float Range = 100f;
@@ -20,7 +21,7 @@ public class GrassGenerator : MonoBehaviour
     private ComputeBuffer argsBuffer;
     private uint[] args = new uint[5] { 0, 0, 0, 0, 0 };
 
-    
+    private Camera _main;
     
     private static readonly int PositionBuffer = Shader.PropertyToID("positionBuffer");
     private static readonly int GrassCount = Shader.PropertyToID("grassCount");
@@ -30,13 +31,17 @@ public class GrassGenerator : MonoBehaviour
     private static readonly int CullResultBufferId = Shader.PropertyToID("cullResultBuffer");
     private static readonly int BoundsMax = Shader.PropertyToID("boundsMax");
     private static readonly int BoundsMin = Shader.PropertyToID("boundsMin");
-
+    private static readonly int HizTextureId = Shader.PropertyToID("hizTexture");
+    private static readonly int DepthTextureSize = Shader.PropertyToID("depthTextureSize");
 
     // Start is called before the first frame update
     void Start()
     {
         _grassCount = GrassCountPerRaw * GrassCountPerRaw;
-
+        _main = Camera.main;
+        if (_main == null)
+            return;
+        
         InitComputeBuffer();
         InitGrassPosition();
         InitComputeShader();
@@ -51,6 +56,7 @@ public class GrassGenerator : MonoBehaviour
 
         var matrix = GL.GetGPUProjectionMatrix(main.projectionMatrix, false) * main.worldToCameraMatrix;
         compute.SetMatrix(VPMatrixId, matrix);
+        compute.SetTexture(_kernel, HizTextureId, depthTextureGenerator.DepthRenderTexture);
         _cullResultBuffer.SetCounterValue(0);
         compute.SetBuffer(_kernel, CullResultBufferId, _cullResultBuffer);
         compute.Dispatch(_kernel, 1 + _grassCount / 1024, 1, 1);
@@ -64,6 +70,7 @@ public class GrassGenerator : MonoBehaviour
 
     void OnDisable() 
     {
+        
         _grassMatrixBuffer?.Release();
         _grassMatrixBuffer = null;
 
@@ -72,6 +79,7 @@ public class GrassGenerator : MonoBehaviour
 
         argsBuffer?.Release();
         argsBuffer = null;
+        
     }
 
     private void InitComputeShader()
@@ -82,6 +90,7 @@ public class GrassGenerator : MonoBehaviour
         
         _kernel = compute.FindKernel("GrassCulling");
         compute.SetInt(GrassCount, _grassCount);
+        compute.SetInt(DepthTextureSize, depthTextureGenerator.DepthTextureSize);
         var opengl = main.projectionMatrix.Equals(GL.GetGPUProjectionMatrix(main.projectionMatrix, false));
         compute.SetBool(IsOpenGL, opengl);
         compute.SetBuffer(_kernel, GrassMatrixBuffer, _grassMatrixBuffer);
