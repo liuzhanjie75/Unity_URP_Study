@@ -51,11 +51,11 @@ Shader "HiZ/DepthTextureMipmapCalculator"
             inline float CalculatorMipmapDepth(float2 uv)
             {
                 float4 depth;
-                float offset = (1.0f / _SourceSize.z);
-                depth.x = SAMPLE_TEXTURE2D(_MainTex, sampler__MainTex, uv);
-                depth.y = SAMPLE_TEXTURE2D(_MainTex, sampler__MainTex, uv + float2(0, offset));
-                depth.z = SAMPLE_TEXTURE2D(_MainTex, sampler__MainTex, uv + float2(offset, 0));
-                depth.w = SAMPLE_TEXTURE2D(_MainTex, sampler__MainTex, uv + float2(offset, offset));
+                float2 invSize = _SourceSize.xy;
+                depth.x = SAMPLE_TEXTURE2D(_MainTex, sampler__MainTex, uv + float2(-0.5f, -0.5f) * invSize);
+                depth.y = SAMPLE_TEXTURE2D(_MainTex, sampler__MainTex, uv + float2(0.5f, -0.5f) * invSize);
+                depth.z = SAMPLE_TEXTURE2D(_MainTex, sampler__MainTex, uv + float2(-0.5f, 0.5f) * invSize);
+                depth.w = SAMPLE_TEXTURE2D(_MainTex, sampler__MainTex, uv + float2(0.5f, 0.5f) * invSize);
                 #if defined(UNITY_REVERSED_Z)
                     return min(min(depth.x, depth.y), min(depth.z, depth.w));
                 #else
