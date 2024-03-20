@@ -179,7 +179,7 @@ Shader "Custom/CustomPBR"
 
                 float NdotL = max(dot(N, L), 0.0);
                 float NdotV = max(dot(N, V), 0.0);
-                float3 specular = NDF * G * F / 4.0 * NdotV * NdotL + 0.0001;
+                float3 specular = NDF * G * F / (4.0 * NdotV * NdotL + 0.0001);
 
                 float3 kS = F;
                 float3 kD = float3(1.0, 1.0, 1.0) - kS;
