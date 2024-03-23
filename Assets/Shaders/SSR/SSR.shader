@@ -1,4 +1,4 @@
-Shader "Test/SSR"
+Shader "Hidden/SSR"
 {
 
     SubShader
@@ -216,7 +216,126 @@ Shader "Test/SSR"
 
             return false;
         }
-        
+
+        float _MaxHierarchicalZBufferTextureMipLevel;
+        TEXTURE2D(_HierarchicalZBufferTexture);
+        SAMPLER(sampler_HierarchicalZBufferTexture);
+
+        bool HierarchicalZScreenSpaceRayMarching(float3 startView, float3 rDir, inout float2 hitUV)
+        {
+            float magnitude = MAXDISTANCE;
+            float end = startView.z + rDir.z * magnitude;
+            if (end > -_ProjectionParams.y)
+                magnitude = (-_ProjectionParams.y - startView.z) / rDir.z;
+            float3 endView = startView + rDir * magnitude;
+
+            // 齐次屏幕空间坐标 
+            float4 startHScreen = TransformViewToHScreen(startView, _SourceSize.xy);
+            float4 endHScreen = TransformViewToHScreen(endView, _SourceSize.xy);
+
+            // inverse w
+            float startK = 1.0 / startHScreen.w;
+            float endk = 1.0 / endHScreen.w;
+
+            // 结束屏幕空间坐标
+            float2 startScreen = startHScreen.xy * startK;
+            float2 endScreen = endHScreen.xy * endk;
+
+            // 经过齐次除法的视角坐标
+            float3 startQ = startView * startK;
+            float3 endQ = endView * endk;
+
+            // 根据斜率将 dx = 1, dy = delta
+            float2 diff = endScreen - startScreen;
+            bool permute = false;
+            if (abs(diff.x) < abs(diff.y))
+            {
+                permute = true;
+                diff = diff.yx;
+                startScreen = startScreen.yx;
+                endScreen = endScreen.yx;
+            }
+
+            // 计算屏幕坐标，齐次坐标， inverse-w 的线性增量
+            float dir = sign(diff.x);
+            float invdx = dir / diff.x;
+            float2 dp = float2(dir, invdx * diff.y);
+            float3 dq = (endQ - startQ) * invdx;
+            float dk = (endk - startK) * invdx;
+
+            dp *= STRIDE;
+            dq *= STRIDE;
+            dk *= STRIDE;
+
+            // 缓存当前的深度和位置
+            float rayZMin = startView.z;
+            float rayZMax = startView.z;
+            float preZ = startView.z;
+
+            float2 P = startScreen;
+            float3 Q = startQ;
+            float K = startK;
+
+            float mipLevel = 0.0;
+            UNITY_LOOP
+            for (int i = 0; i < STEP_COUNT; i++)
+            {
+                // 步近
+                P += dp * exp2(mipLevel);
+                Q += dq * exp2(mipLevel);
+                K += dk * exp2(mipLevel);
+
+                // 得到步近前后两点的深度
+                rayZMin = preZ;
+                rayZMax = (dq.z * exp2(mipLevel) * 0.5 + Q.z) / (dk * exp2(mipLevel) * 0.5 + K);
+                preZ = rayZMax;
+                if (rayZMin > rayZMax)
+                    swap(rayZMin, rayZMax);
+
+                // 得到交点uv
+                hitUV = permute ? P.yx : P;
+                hitUV *= _ScreenSize.zw;
+                hitUV.x = 1.0f - hitUV.x;
+                hitUV.y = 1.0f - hitUV.y;
+
+                if (any(hitUV < 0.0) || any(hitUV > 1.0))
+                    return false;
+
+                float rawDepth = SAMPLE_TEXTURE2D_X_LOD(_HierarchicalZBufferTexture, sampler_HierarchicalZBufferTexture,
+                                                        hitUV, mipLevel);
+                float surfaceDepth = -LinearEyeDepth(rawDepth, _ZBufferParams);
+
+                bool behind = rayZMin + 0.1 <= surfaceDepth;
+
+                if (!behind)
+                {
+                    mipLevel = min(mipLevel + 1, _MaxHierarchicalZBufferTextureMipLevel);
+                }
+                else
+                {
+                    if (mipLevel == 0)
+                    {
+                        if (abs(surfaceDepth - rayZMax) < THICKNESS)
+                        {
+                            //return float4(hitUV, rayZMin, 1.0);
+                            return true;
+                        }
+                    }
+                    else
+                    {
+                        P -= dp * exp2(mipLevel);
+                        Q -= dq * exp2(mipLevel);
+                        K -= dk * exp2(mipLevel);
+                        preZ = Q.z / K;
+
+                        mipLevel--;
+                    }
+                }
+            }
+
+            return false;
+            //return float4(hitUV, rayZMin, 0.0);
+        }
         ENDHLSL
         
         Pass
@@ -248,6 +367,11 @@ Shader "Test/SSR"
                     return GetSource(hitUV) + GetSource(input.texcoord);
                 else
                     return GetSource(hitUV);
+
+                // if (HierarchicalZScreenSpaceRayMarching(startView, rDir, hitUV))
+                //     return GetSource(hitUV) + GetSource(input.texcoord);
+                // else
+                //     return GetSource(hitUV);
 
             }
            ENDHLSL

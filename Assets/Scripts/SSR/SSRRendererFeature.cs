@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
@@ -30,15 +31,23 @@ namespace SSR
     {
         [SerializeField] private SSRSettings Settings = new();
         public Shader SSRShader;
+        public Shader HiZShader;
 
         private SSRRenderPass _renderPass;
+        private HierarchicalZBufferPass _hizPass;
         private Material _material;
+        private Material _hizMaterial;
 
         public override void Create()
         {
             _renderPass ??= new SSRRenderPass()
             {
                 renderPassEvent = RenderPassEvent.AfterRenderingOpaques
+            };
+
+            _hizPass ??= new HierarchicalZBufferPass()
+            {
+                renderPassEvent = RenderPassEvent.AfterRenderingSkybox - 1
             };
         }
 
@@ -53,6 +62,9 @@ namespace SSR
                 return;
             }
 
+            if (_hizPass.Setup(_hizMaterial))
+                renderer.EnqueuePass(_hizPass);
+
             if (_renderPass.Setup(ref Settings, _material))
                 renderer.EnqueuePass(_renderPass);
         }
@@ -62,16 +74,19 @@ namespace SSR
             base.Dispose(disposing);
 
             _renderPass?.Dispose();
+            _hizPass?.Dispose();
             _renderPass = null;
+            _hizPass = null;
         }
 
         private bool GetMaterials()
         {
             _material ??= CoreUtils.CreateEngineMaterial(SSRShader);
-            return _material != null;
+            _hizMaterial ??= CoreUtils.CreateEngineMaterial(HiZShader);
+            return _material != null && _hizMaterial != null;
         }
 
-        public class SSRRenderPass : ScriptableRenderPass
+        private class SSRRenderPass : ScriptableRenderPass
         {
             private enum ShaderPass
             {
@@ -196,19 +211,19 @@ namespace SSR
                     // SSR
                     Blitter.BlitCameraTexture(cmd, _sourceRTHandle, _ssrTexture0, _material,
                         (int)ShaderPass.Raymarching);
-                    
+
                     // Horizontal blur
                     cmd.SetGlobalVector(BlurRadiusID, new Vector4(_ssrSettings.BlurRadius, 0, 0, 0));
                     Blitter.BlitCameraTexture(cmd, _ssrTexture0, _ssrTexture1, _material, (int)ShaderPass.Blur);
-                    
+
                     // Vertical Blur
                     cmd.SetGlobalVector(BlurRadiusID, new Vector4(0, _ssrSettings.BlurRadius, 0, 0));
                     Blitter.BlitCameraTexture(cmd, _ssrTexture1, _ssrTexture0, _material, (int)ShaderPass.Blur);
-                    
+
                     // Additive Pass
                     Blitter.BlitCameraTexture(cmd, _ssrTexture0, _destinationRTHandle, _material
                         , _ssrSettings.blendMode == BlendMode.Addtive ? (int)ShaderPass.Addtive : (int)ShaderPass.Balance);
-                    
+
                     //Blitter.BlitCameraTexture(cmd, _ssrTexture0, _destinationRTHandle);
                 }
 
@@ -232,6 +247,145 @@ namespace SSR
                 _ssrTexture1?.Release();
                 _ssrTexture0 = null;
                 _ssrTexture1 = null;
+            }
+        }
+
+        private class HierarchicalZBufferPass : ScriptableRenderPass
+        {
+            private RenderTextureDescriptor _hiZBufferDescriptor;
+            private RenderTextureDescriptor[] _hiZBufferDescriptors;
+            private RTHandle _hiZBufferTexture;
+            private RTHandle[] _hiZBufferTextures;
+
+            private const int MipCount = 8;
+            private Material _material;
+
+            private static readonly string HiZBufferTextureName = "HiZBufferTextureName";
+
+            private static readonly int HiZBufferFromMiplevelID =
+                Shader.PropertyToID("_HierarchicalZBufferTextureFromMipLevel");
+
+            private static readonly int HiZBufferToMiplevelID =
+                Shader.PropertyToID("_HierarchicalZBufferTextureToMipLevel");
+
+            private static readonly int SourceSizeID = Shader.PropertyToID("_SourceSize");
+
+            private static readonly int MaxHiZBufferTextureipLevelID =
+                Shader.PropertyToID("_MaxHierarchicalZBufferTextureMipLevel");
+
+            private static readonly int HiZBufferTextureID = Shader.PropertyToID("_HierarchicalZBufferTexture");
+            private readonly ProfilingSampler _profilingSampler = new("HiZ");
+
+            public override void OnCameraSetup(CommandBuffer cmd, ref RenderingData renderingData)
+            {
+                base.OnCameraSetup(cmd, ref renderingData);
+                var renderer = renderingData.cameraData.renderer;
+
+                // 分配RTHandle
+                var desc = renderingData.cameraData.cameraTargetDescriptor;
+                var height = Mathf.NextPowerOfTwo(desc.height);
+                var width = Mathf.NextPowerOfTwo(desc.width);
+
+                _hiZBufferDescriptor =
+                    new RenderTextureDescriptor(width, height, RenderTextureFormat.RFloat, 0, MipCount)
+                    {
+                        msaaSamples = 1,
+                        useMipMap = true,
+                        sRGB = false // linear
+                    };
+                RenderingUtils.ReAllocateIfNeeded(ref _hiZBufferTexture, _hiZBufferDescriptor, FilterMode.Bilinear,
+                    TextureWrapMode.Clamp, name: HiZBufferTextureName);
+
+                for (var i = 0; i < MipCount; i++)
+                {
+                    _hiZBufferDescriptors[i] =
+                        new RenderTextureDescriptor(width, height, RenderTextureFormat.RFloat, 0, 1)
+                        {
+                            msaaSamples = 1,
+                            useMipMap = false,
+                            sRGB = false // linear
+                        };
+                    RenderingUtils.ReAllocateIfNeeded(ref _hiZBufferTextures[i], _hiZBufferDescriptors[i],
+                        FilterMode.Bilinear, TextureWrapMode.Clamp, name: HiZBufferTextureName + i);
+                    // generate mipmap
+                    width = Math.Max(width / 2, 1);
+                    height = Math.Max(height / 2, 1);
+                }
+
+                // 设置Material属性
+
+                // 配置目标和清除
+                ConfigureTarget(renderer.cameraColorTargetHandle);
+                ConfigureClear(ClearFlag.None, Color.white);
+            }
+
+            public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
+            {
+                if (_material == null)
+                {
+                    Debug.LogErrorFormat(
+                        "{0}.Execute(): Missing material. ScreenSpaceAmbientOcclusion pass will not execute. Check for missing reference in the renderer resources.",
+                        GetType().Name);
+                    return;
+                }
+
+                var cmd = CommandBufferPool.Get();
+                context.ExecuteCommandBuffer(cmd);
+                cmd.Clear();
+
+                var cameraColorTexture = renderingData.cameraData.renderer.cameraColorTargetHandle;
+                var cameraDepthTexture = renderingData.cameraData.renderer.cameraDepthTargetHandle;
+                var destinationTexture = renderingData.cameraData.renderer.cameraColorTargetHandle;
+
+                using (new ProfilingScope(cmd, _profilingSampler))
+                {
+                    // mip 0
+                    Blitter.BlitCameraTexture(cmd, cameraDepthTexture, _hiZBufferTextures[0]);
+                    cmd.CopyTexture(_hiZBufferTextures[0], 0, 0, _hiZBufferTexture, 0, 0);
+
+                    // mip 1~max
+                    for (var i = 1; i < MipCount; i++)
+                    {
+                        cmd.SetGlobalFloat(HiZBufferFromMiplevelID, i - 1);
+                        cmd.SetGlobalFloat(HiZBufferToMiplevelID, i);
+                        var descriptor = _hiZBufferDescriptors[i - 1];
+                        cmd.SetGlobalVector(SourceSizeID,
+                            new Vector4(descriptor.width, descriptor.height, 1.0f / descriptor.width, 1.0f / descriptor.height));
+                        Blitter.BlitCameraTexture(cmd, _hiZBufferTextures[i - 1], _hiZBufferTextures[i], _material, 0);
+
+                        cmd.CopyTexture(_hiZBufferTextures[i], 0, 0, _hiZBufferTexture, 0, i);
+                    }
+
+                    // set global hiz texture
+                    cmd.SetGlobalFloat(MaxHiZBufferTextureipLevelID, MipCount - 1);
+                    cmd.SetGlobalTexture(HiZBufferTextureID, _hiZBufferTexture);
+                }
+
+                context.ExecuteCommandBuffer(cmd);
+                CommandBufferPool.Release(cmd);
+            }
+
+            public bool Setup(Material material)
+            {
+                _material = material;
+                ConfigureInput(ScriptableRenderPassInput.Normal);
+
+                _hiZBufferDescriptors = new RenderTextureDescriptor[MipCount];
+                _hiZBufferTextures = new RTHandle[MipCount];
+                return _material != null;
+            }
+
+            public void Dispose()
+            {
+                _hiZBufferTexture?.Release();
+                _hiZBufferTexture = null;
+                if (_hiZBufferTextures == null)
+                    return;
+                for (var i = 0; i < MipCount; i++)
+                {
+                    _hiZBufferTextures[i]?.Release();
+                    _hiZBufferTextures[i] = null;
+                }
             }
         }
     }
