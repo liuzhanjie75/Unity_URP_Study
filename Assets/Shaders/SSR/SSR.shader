@@ -20,9 +20,18 @@ Shader "Test/SSR"
         float4 _CameraViewYExtent;
         float4 _SourceSize;
 
+        // jitter dither map
+        static half dither[16] = {
+            0.0, 0.5, 0.125, 0.625,
+            0.75, 0.25, 0.875, 0.375,
+            0.187, 0.687, 0.0625, 0.562,
+            0.937, 0.437, 0.812, 0.312
+        };
+
         #define MAXDISTANCE 10
-        #define STRIDE 3
-        #define STEP_COUNT 200
+        #define STRIDE 8
+        #define STEP_COUNT 70
+        #define BINARY_COUNT 6
         // 能反射和不可能的反射之间的界限  
         #define THICKNESS 0.5
 
@@ -84,6 +93,129 @@ Shader "Test/SSR"
         {
             return half4(GetSource(input.texcoord).rgb * INTENSITY, 1.0);
         }
+
+        bool ScreenSpaceRayMarching(inout float2 P, inout float3 Q, inout float K, float2 dp, float3 dq, float dk,
+                                    float rayZ, bool permute, out float depthDistance, inout float2 hitUV)
+        {
+            float rayZMin = rayZ;
+            float rayZMax = rayZ;
+            float preZ = rayZ;
+
+            UNITY_LOOP
+            for (int i = 0; i < STEP_COUNT; ++i)
+            {
+                P += dp;
+                Q += dq;
+                K += dk;
+
+                rayZMin = preZ;
+                rayZMax = (dq.z * 0.5 + Q.z) / (dk * 0.5 + K);
+                preZ = rayZMax;
+                if (rayZMin > rayZMax)
+                    swap(rayZMin, rayZMax);
+
+                hitUV = permute > 0.5 ? P.yx : P;
+                hitUV *= _ScreenSize.zw;
+                hitUV.x = 1.0f - hitUV.x;
+                hitUV.y = 1.0f - hitUV.y;
+                if (any(hitUV < 0.0) || any(hitUV > 1.0))
+                    return false;
+
+                float surfaceDepth = -LinearEyeDepth(SampleSceneDepth(hitUV), _ZBufferParams);
+                bool isBehind = (rayZMin + 0.1 < surfaceDepth); // 加一个bias 防止stride过小，自反射  
+
+                depthDistance = abs(surfaceDepth - rayZMax);
+                if (isBehind)
+                    return true;
+            }
+
+            return false;
+        }
+
+        bool BinarySearchRaymarching(float3 startView, float3 rDir, inout float2 hitUV)
+        {
+            float magnitude = MAXDISTANCE;
+            float end = startView.z + rDir.z * magnitude;
+            if (end > -_ProjectionParams.y)
+                magnitude = (-_ProjectionParams.y - startView.z) / rDir.z;
+            float3 endView = startView + rDir * magnitude;
+
+            // 齐次屏幕空间坐标 
+            float4 startHScreen = TransformViewToHScreen(startView, _SourceSize.xy);
+            float4 endHScreen = TransformViewToHScreen(endView, _SourceSize.xy);
+
+            // inverse w
+            float startK = 1.0 / startHScreen.w;
+            float endk = 1.0 / endHScreen.w;
+
+            // 结束屏幕空间坐标
+            float2 startScreen = startHScreen.xy * startK;
+            float2 endScreen = endHScreen.xy * endk;
+
+            // 经过齐次除法的视角坐标
+            float3 startQ = startView * startK;
+            float3 endQ = endView * endk;
+
+            // 根据斜率将 dx = 1, dy = delta
+            float2 diff = endScreen - startScreen;
+            bool permute = false;
+            if (abs(diff.x) < abs(diff.y))
+            {
+                permute = true;
+                diff = diff.yx;
+                startScreen = startScreen.yx;
+                endScreen = endScreen.yx;
+            }
+
+            // 计算屏幕坐标，齐次坐标， inverse-w 的线性增量
+            float dir = sign(diff.x);
+            float invdx = dir / diff.x;
+            float2 dp = float2(dir, invdx * diff.y);
+            float3 dq = (endQ - startQ) * invdx;
+            float dk = (endk - startK) * invdx;
+
+            dp *= STRIDE;
+            dq *= STRIDE;
+            dk *= STRIDE;
+
+            // 缓存当前的深度和位置
+            float rayZ = startView.z;
+ 
+            float2 P = startScreen;
+            float3 Q = startQ;
+            float K = startK;
+
+            float depthDistance = 0.0;
+            UNITY_LOOP
+            for (int i = 0; i < BINARY_COUNT; i++)
+            {
+                float2 ditherUV = fmod(P, 4);
+                float jitter = dither[ditherUV.x * 4 + ditherUV.y];
+                P += dp * jitter;
+                Q += dq * jitter;
+                K += dk * jitter;
+                if (ScreenSpaceRayMarching(P, Q, K, dp, dq, dk, rayZ, permute, depthDistance, hitUV))
+                {
+
+                    if (depthDistance < THICKNESS)
+                        return true;
+                    P -= dp;
+                    Q -= dq;
+                    K -= dk;
+                    rayZ = Q / K;
+
+                    dp *= 0.5;
+                    dq *= 0.5;
+                    dk *= 0.5;
+                }
+                else
+                {
+                    return false;
+                }
+            }
+
+            return false;
+        }
         
         ENDHLSL
         
@@ -98,7 +230,6 @@ Shader "Test/SSR"
             #pragma vertex Vert
             #pragma fragment SSRFrag
 
-            
             float4 SSRFrag(Varyings input) : SV_Target
             {
                 float rawDepth = SampleSceneDepth(input.texcoord);
@@ -109,102 +240,15 @@ Shader "Test/SSR"
                 float3 vDir = normalize(vpos);
                 float3 rDir = TransformWorldToViewDir(normalize(reflect(vDir, normal)));
 
-                //return rawDepth;
-                //return float4(rDir.x, rDir.y, rDir.z, 1.0);
-
-                float magnitude = MAXDISTANCE;
-
                 // view space coordinates
-               float3 wpos = _WorldSpaceCameraPos + vpos;
+                float3 wpos = _WorldSpaceCameraPos + vpos;
                 float3 startView = TransformWorldToView(wpos);
-                float end = startView.z + rDir.z * magnitude;
-                if (end > -_ProjectionParams.y)
-                    magnitude = (-_ProjectionParams.y - startView.z) / rDir.z;
-                float3 endView = startView + rDir * magnitude;
+                float2 hitUV = input.texcoord;
+                if (BinarySearchRaymarching(startView, rDir, hitUV))
+                    return GetSource(hitUV) + GetSource(input.texcoord);
+                else
+                    return GetSource(hitUV);
 
-                // 齐次屏幕空间坐标 
-                float4 startHScreen = TransformViewToHScreen(startView, _SourceSize.xy);
-                float4 endHScreen = TransformViewToHScreen(endView, _SourceSize.xy);
-
-                // inverse w
-                float startK = 1.0 / startHScreen.w;
-                float endk = 1.0 / endHScreen.w;
-
-                // 结束屏幕空间坐标
-                float2 startScreen = startHScreen.xy * startK;
-                float2 endScreen = endHScreen.xy * endk;
-
-                // 经过齐次除法的视角坐标
-                float3 startQ = startView * startK;
-                float3 endQ = endView * endk;
-
-                // 根据斜率将 dx = 1, dy = delta
-                float2 diff = endScreen - startScreen;
-                bool permute = false;
-                if (abs(diff.x) < abs(diff.y))
-                {
-                    permute = true;
-                    diff = diff.yx;
-                    startScreen = startScreen.yx;
-                    endScreen = endScreen.yx;
-                }
-
-                // 计算屏幕坐标，齐次坐标， inverse-w 的线性增量
-                float dir = sign(diff.x);
-                float invdx = dir / diff.x;
-                float2 dp = float2(dir, invdx * diff.y);
-                float3 dq = (endQ - startQ) * invdx;
-                float dk = (endk - startK) * invdx;
-
-                dp *= STRIDE;
-                dq *= STRIDE;
-                dk *= STRIDE;
-
-                // 缓存当前的深度和位置
-                float rayZmin = startView.z;
-                float rayZmax = startView.z;
-                float preZ = startView.z;
-
-                float2 P = startScreen;
-                float3 Q = startQ;
-                float K = startK;
-
-                end = endScreen.x * dir;
-
-                // 进行屏幕空间射线步进
-                UNITY_LOOP
-                for (int i = 0; i < STEP_COUNT && P.x * dir <= end; i++)
-                {
-                    P += dp;
-                    Q.z += dq.z;
-                    K += dk;
-
-                    // 得到步进前后两点的深度
-                    rayZmin = preZ;
-                    rayZmax = (dq.z * 0.5 + Q.z) / (dk * 0.5 + K);
-                    preZ = rayZmax;
-                    if (rayZmin > rayZmax)
-                        swap(rayZmin, rayZmax);
-
-                    // 得到交点 uv
-                    float2 hitUV = permute ? P.yx : P;
-                    hitUV *= _SourceSize.zw;
-                    hitUV.x = 1.0f - hitUV.x;
-                    hitUV.y = 1.0f - hitUV.y;
-                    if (any(hitUV < 0.0) || any(hitUV > 1.0))
-                        //return 0;
-                        return GetSource(input.texcoord);
-
-                    float surfaceDepth = -LinearEyeDepth(SampleSceneDepth(hitUV), _ZBufferParams);
-                    bool isBehind = (rayZmin + 0.1 < surfaceDepth); // 加一个bias 防止stride过小，自反射  
-                    bool intersecting = isBehind && (rayZmax >= surfaceDepth - THICKNESS);
-                    if (intersecting)
-                         return GetSource(hitUV) + GetSource(input.texcoord);
-                }
-                
-                //return 0;
-                
-                return GetSource(input.texcoord);
             }
            ENDHLSL
         }
