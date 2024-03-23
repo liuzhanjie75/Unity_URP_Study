@@ -16,8 +16,8 @@ public class GrassGenerator : MonoBehaviour
     
     private int _kernel;
     
-    private int cachedInstanceCount = -1;
-    private int cachedSubMeshIndex = -1;
+    //private int cachedInstanceCount = -1;
+    //private int cachedSubMeshIndex = -1;
     private ComputeBuffer argsBuffer;
     private uint[] args = new uint[5] { 0, 0, 0, 0, 0 };
 
