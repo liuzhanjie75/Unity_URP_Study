@@ -79,10 +79,8 @@ Shader "Hidden/SSR"
         // 从视角坐标转裁剪屏幕 ao 坐标
         float4 TransformViewToHScreen(float3 vpos, float2 screenSize)
         {
-            //float4 cpos = mul(UNITY_MATRIX_VP, float4(vpos.x, vpos.y, vpos.z, 1.0));
-            float4 cpos = mul(UNITY_MATRIX_VP, vpos);
+            float4 cpos = mul(UNITY_MATRIX_P, vpos);
             cpos.xy = float2(cpos.x, cpos.y * _ProjectionParams.x) * 0.5f + 0.5f * cpos.w;
-            //cpos.xy = float2(cpos.x, cpos.y * _ProjectionParams.x) * cpos.w * 0.5f + 0.5f;
             cpos.xy *= screenSize;
             return cpos;
         }
@@ -116,8 +114,6 @@ Shader "Hidden/SSR"
 
                 hitUV = permute > 0.5 ? P.yx : P;
                 hitUV *= _ScreenSize.zw;
-                hitUV.x = 1.0f - hitUV.x;
-                hitUV.y = 1.0f - hitUV.y;
                 if (any(hitUV < 0.0) || any(hitUV > 1.0))
                     return false;
 
@@ -295,8 +291,6 @@ Shader "Hidden/SSR"
                 // 得到交点uv
                 hitUV = permute ? P.yx : P;
                 hitUV *= _ScreenSize.zw;
-                hitUV.x = 1.0f - hitUV.x;
-                hitUV.y = 1.0f - hitUV.y;
 
                 if (any(hitUV < 0.0) || any(hitUV > 1.0))
                     return false;
