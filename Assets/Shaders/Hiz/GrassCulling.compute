@@ -1,7 +1,8 @@
 // Each #kernel tells which function to compile; you can have many kernels
 #pragma kernel GrassCulling
 
-bool isOpenGL;
+#include "UnityCG.cginc"
+
 uint grassCount;
 uint depthTextureSize;
 float3 boundsMin;
@@ -19,14 +20,15 @@ AppendStructuredBuffer<float4x4> cullResultBuffer;
 //在Clip Space下，根据齐次坐标做Clipping操作
 bool IsInClipSpace(float4 clipSpacePosition)
 {
-    if (isOpenGL)
+    #ifndef UNITY_REVERSED_Z
         return clipSpacePosition.x > -clipSpacePosition.w && clipSpacePosition.x < clipSpacePosition.w &&
             clipSpacePosition.y > -clipSpacePosition.w && clipSpacePosition.y < clipSpacePosition.w &&
             clipSpacePosition.z > -clipSpacePosition.w && clipSpacePosition.z < clipSpacePosition.w;
-    
+    #else
     return clipSpacePosition.x > -clipSpacePosition.w && clipSpacePosition.x < clipSpacePosition.w &&
         clipSpacePosition.y > -clipSpacePosition.w && clipSpacePosition.y < clipSpacePosition.w &&
         clipSpacePosition.z > 0 && clipSpacePosition.z < clipSpacePosition.w;
+    #endif
 }
 
 [numthreads(1024,1,1)]
@@ -84,14 +86,16 @@ void GrassCulling(uint3 id : SV_DispatchThreadID)
     float depth = maxZ;
 
     // 如果是OpenGL,首先要取最小的那个z值，然后需要 *0.5+0.5 转换到 0-1 的深度值
-    if (isOpenGL)
+    #ifndef UNITY_REVERSED_Z
     {
         depth = minZ;
         depth = depth * 0.5f + 0.5f;
     }
-    
+    #endif
+
     // 计算应该读取哪层mipmap
-    uint mipmapLevel = (uint)clamp(log2(max(maxX - minX, maxY - minY) / 2 * depthTextureSize), 0, log2(depthTextureSize) - 4);
+    uint mipmapLevel = (uint)clamp(log2(max(maxX - minX, maxY - minY) / 2 * depthTextureSize), 0,
+                                   log2(depthTextureSize) - 4);
     // 当前mipmap的大小
     uint size = depthTextureSize / (1 << mipmapLevel);
 
@@ -100,7 +104,7 @@ void GrassCulling(uint3 id : SV_DispatchThreadID)
     uint2 pixelRightTop = uint2(clamp(uvRightTop.x * size, 0, size - 1), clamp(uvRightTop.y * size, 0, size - 1));
     // 采样对应深度图的对应像素的深度值，并且作比较
     float depthInTexture = hizTexture.mips[mipmapLevel][pixelLeftBottom].r;
-    if (isOpenGL)
+    #ifndef UNITY_REVERSED_Z
     {
         if (pixelLeftBottom.x < pixelRightTop.x && pixelLeftBottom.y < pixelRightTop.y)
         {
@@ -115,21 +119,25 @@ void GrassCulling(uint3 id : SV_DispatchThreadID)
         if (depthInTexture < depth)
             return;
     }
-    else
+    #else
     {
         if (pixelLeftBottom.x < pixelRightTop.x && pixelLeftBottom.y < pixelRightTop.y)
         {
             depthInTexture = min(min(depthInTexture, hizTexture.mips[mipmapLevel][pixelRightTop].r),
-                min(hizTexture.mips[mipmapLevel][int2(pixelLeftBottom.x, pixelRightTop.y)].r, hizTexture.mips[mipmapLevel][int2(pixelRightTop.x, pixelLeftBottom.y)].r));
+                                 min(hizTexture.mips[mipmapLevel][int2(pixelLeftBottom.x, pixelRightTop.y)].r,
+                                     hizTexture.mips[mipmapLevel][int2(pixelRightTop.x, pixelLeftBottom.y)].r));
         }
         else if (pixelLeftBottom.x < pixelRightTop.x)
-            depthInTexture = min(depthInTexture, hizTexture.mips[mipmapLevel][int2(pixelRightTop.x, pixelLeftBottom.y)].r);
+            depthInTexture = min(depthInTexture,
+                                 hizTexture.mips[mipmapLevel][int2(pixelRightTop.x, pixelLeftBottom.y)].r);
         else if (pixelLeftBottom.y < pixelRightTop.y)
-            depthInTexture = min(depthInTexture, hizTexture.mips[mipmapLevel][int2(pixelLeftBottom.x, pixelRightTop.y)].r);
+            depthInTexture = min(depthInTexture,
+                                 hizTexture.mips[mipmapLevel][int2(pixelLeftBottom.x, pixelRightTop.y)].r);
 
         if (depthInTexture > depth)
             return;
     }
+    #endif
 
     cullResultBuffer.Append(grassMatrix);
 }

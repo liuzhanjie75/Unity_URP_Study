@@ -205,7 +205,6 @@ GameObject:
   - component: {fileID: 330585544}
   - component: {fileID: 330585547}
   - component: {fileID: 330585548}
-  - component: {fileID: 330585549}
   - component: {fileID: 330585550}
   m_Layer: 0
   m_Name: Main Camera
@@ -373,19 +372,6 @@ MonoBehaviour:
     m_RotationOrder: 4
   rotationLerpTime: 0.01
   invertY: 1
---- !u!114 &330585549
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 330585543}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 09de80c1c36e54345802aa380673fc09, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  DepthTextureShader: {fileID: 4800000, guid: 53caf79db4eec514e88ecacb048984a1, type: 3}
 --- !u!114 &330585550
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -404,7 +390,6 @@ MonoBehaviour:
   SubMeshIndex: 0
   GrassCountPerRaw: 300
   compute: {fileID: 7200000, guid: 1376f6c374538d84298926a13cbe7765, type: 3}
-  depthTextureGenerator: {fileID: 330585549}
 --- !u!1 &410087039
 GameObject:
   m_ObjectHideFlags: 0

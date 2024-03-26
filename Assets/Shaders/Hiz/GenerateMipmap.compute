@@ -1,0 +1,30 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel GenerateMipmap
+
+// Create a RenderTexture with enableRandomWrite flag and set it
+// with cs.SetTexture
+RWTexture2D<float> _SourceTexture;
+RWTexture2D<float> _DestTexture;
+float4 _DepthTextureSize;
+
+#include "UnityCG.cginc"
+
+[numthreads(8,8,1)]
+void GenerateMipmap (uint2 id : SV_DispatchThreadID)
+{
+    if (id.x > _DepthTextureSize.x || id.y > _DepthTextureSize.y)
+        return;
+
+    const uint2 origin_id = id * 2;
+    float4 depth;
+    depth.x = _SourceTexture[origin_id];
+    depth.y = _SourceTexture[origin_id + uint2(1,0)];
+    depth.z = _SourceTexture[origin_id + uint2(0,1)];
+    depth.w = _SourceTexture[origin_id + uint2(1,1)];
+    #ifdef UNITY_REVERSED_Z
+        _DestTexture[id] = min(min(depth.x, depth.y), min(depth.z, depth.w));
+    #else
+        _DestTexture[id] = max(max(depth.x, depth.y), max(depth.z, depth.w));
+    #endif
+    
+}

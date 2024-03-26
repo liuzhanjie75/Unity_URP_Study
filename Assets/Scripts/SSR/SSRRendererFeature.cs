@@ -191,6 +191,8 @@ namespace SSR
 
             public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
             {
+                if (renderingData.cameraData.isSceneViewCamera)
+                    return;
                 if (_material == null)
                 {
                     Debug.LogErrorFormat(
@@ -305,6 +307,7 @@ namespace SSR
                             useMipMap = false,
                             sRGB = false // linear
                         };
+                    _hiZBufferTextures[i].Release();
                     RenderingUtils.ReAllocateIfNeeded(ref _hiZBufferTextures[i], _hiZBufferDescriptors[i],
                         FilterMode.Bilinear, TextureWrapMode.Clamp, name: HiZBufferTextureName + i);
                     // generate mipmap
@@ -321,6 +324,8 @@ namespace SSR
 
             public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
             {
+                if (renderingData.cameraData.isSceneViewCamera)
+                    return;
                 if (_material == null)
                 {
                     Debug.LogErrorFormat(
