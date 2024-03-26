@@ -31,12 +31,11 @@ namespace SSR
     {
         [SerializeField] private SSRSettings Settings = new();
         public Shader SSRShader;
-        public Shader HiZShader;
+        public ComputeShader HiZShader;
 
         private SSRRenderPass _renderPass;
         private HierarchicalZBufferPass _hizPass;
         private Material _material;
-        private Material _hizMaterial;
 
         public override void Create()
         {
@@ -62,7 +61,7 @@ namespace SSR
                 return;
             }
 
-            if (_hizPass.Setup(_hizMaterial))
+            if (_hizPass.Setup(HiZShader))
                 renderer.EnqueuePass(_hizPass);
 
             if (_renderPass.Setup(ref Settings, _material))
@@ -82,8 +81,7 @@ namespace SSR
         private bool GetMaterials()
         {
             _material ??= CoreUtils.CreateEngineMaterial(SSRShader);
-            _hizMaterial ??= CoreUtils.CreateEngineMaterial(HiZShader);
-            return _material != null && _hizMaterial != null;
+            return _material != null;
         }
 
         private class SSRRenderPass : ScriptableRenderPass
@@ -254,82 +252,60 @@ namespace SSR
 
         private class HierarchicalZBufferPass : ScriptableRenderPass
         {
-            private RenderTextureDescriptor _hiZBufferDescriptor;
-            private RenderTextureDescriptor[] _hiZBufferDescriptors;
-            private RTHandle _hiZBufferTexture;
-            private RTHandle[] _hiZBufferTextures;
+            private RenderTexture _depthRenderTexture;
+            private int _width;
+            private int _height;
+            private const int DepthTextureMip = 8;
+            private ComputeShader _generateMipmap;
+            private int _genMipmapKernel;
 
-            private const int MipCount = 8;
-            private Material _material;
-
-            private static readonly string HiZBufferTextureName = "HiZBufferTextureName";
-
-            private static readonly int HiZBufferFromMiplevelID =
-                Shader.PropertyToID("_HierarchicalZBufferTextureFromMipLevel");
-
-            private static readonly int HiZBufferToMiplevelID =
-                Shader.PropertyToID("_HierarchicalZBufferTextureToMipLevel");
-
-            private static readonly int SourceSizeID = Shader.PropertyToID("_SourceSize");
+            private static readonly int SourceTexID = Shader.PropertyToID("_SourceTexture");
+            private static readonly int DestTexId = Shader.PropertyToID("_DestTexture");
+            private static readonly int DepthTexSizeId = Shader.PropertyToID("_DepthTextureSize");
 
             private static readonly int MaxHiZBufferTextureipLevelID =
                 Shader.PropertyToID("_MaxHierarchicalZBufferTextureMipLevel");
-
             private static readonly int HiZBufferTextureID = Shader.PropertyToID("_HierarchicalZBufferTexture");
-            private readonly ProfilingSampler _profilingSampler = new("HiZ");
+            private readonly ProfilingSampler _profilingSampler = new("SSRHiZ");
 
             public override void OnCameraSetup(CommandBuffer cmd, ref RenderingData renderingData)
             {
                 base.OnCameraSetup(cmd, ref renderingData);
-                var renderer = renderingData.cameraData.renderer;
 
-                // 分配RTHandle
                 var desc = renderingData.cameraData.cameraTargetDescriptor;
                 var height = Mathf.NextPowerOfTwo(desc.height);
                 var width = Mathf.NextPowerOfTwo(desc.width);
 
-                _hiZBufferDescriptor =
-                    new RenderTextureDescriptor(width, height, RenderTextureFormat.RFloat, 0, MipCount)
-                    {
-                        msaaSamples = 1,
-                        useMipMap = true,
-                        sRGB = false // linear
-                    };
-                RenderingUtils.ReAllocateIfNeeded(ref _hiZBufferTexture, _hiZBufferDescriptor, FilterMode.Bilinear,
-                    TextureWrapMode.Clamp, name: HiZBufferTextureName);
-
-                for (var i = 0; i < MipCount; i++)
+                if (_width != width && height != _height)
                 {
-                    _hiZBufferDescriptors[i] =
-                        new RenderTextureDescriptor(width, height, RenderTextureFormat.RFloat, 0, 1)
-                        {
-                            msaaSamples = 1,
-                            useMipMap = false,
-                            sRGB = false // linear
-                        };
-                    _hiZBufferTextures[i].Release();
-                    RenderingUtils.ReAllocateIfNeeded(ref _hiZBufferTextures[i], _hiZBufferDescriptors[i],
-                        FilterMode.Bilinear, TextureWrapMode.Clamp, name: HiZBufferTextureName + i);
-                    // generate mipmap
-                    width = Math.Max(width / 2, 1);
-                    height = Math.Max(height / 2, 1);
+                    if (_depthRenderTexture != null)
+                        _depthRenderTexture.Release();
+                    
+                    _depthRenderTexture = new RenderTexture(width, height, 0, RenderTextureFormat.RFloat, DepthTextureMip)
+                    {
+                        name = "hizDepthTexture",
+                        useMipMap = true,
+                        autoGenerateMips = false,
+                        enableRandomWrite = true,
+                        wrapMode = TextureWrapMode.Clamp,
+                        filterMode = FilterMode.Point
+                    };
+                    _depthRenderTexture.Create();
                 }
 
-                // 设置Material属性
+                _width = width;
+                _height = height;
 
-                // 配置目标和清除
-                ConfigureTarget(renderer.cameraColorTargetHandle);
-                ConfigureClear(ClearFlag.None, Color.white);
             }
 
             public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
             {
                 if (renderingData.cameraData.isSceneViewCamera)
                     return;
-                if (_material == null)
+                if (_generateMipmap == null)
                 {
                     Debug.LogErrorFormat(
-                        "{0}.Execute(): Missing material. ScreenSpaceAmbientOcclusion pass will not execute. Check for missing reference in the renderer resources.",
+                        "{0}.Execute(): Missing ComputeShader. Check for missing reference in the renderer resources.",
                         GetType().Name);
                     return;
                 }
@@ -338,59 +314,51 @@ namespace SSR
                 context.ExecuteCommandBuffer(cmd);
                 cmd.Clear();
 
-                var cameraColorTexture = renderingData.cameraData.renderer.cameraColorTargetHandle;
                 var cameraDepthTexture = renderingData.cameraData.renderer.cameraDepthTargetHandle;
-                var destinationTexture = renderingData.cameraData.renderer.cameraColorTargetHandle;
 
                 using (new ProfilingScope(cmd, _profilingSampler))
                 {
-                    // mip 0
-                    Blitter.BlitCameraTexture(cmd, cameraDepthTexture, _hiZBufferTextures[0]);
-                    cmd.CopyTexture(_hiZBufferTextures[0], 0, 0, _hiZBufferTexture, 0, 0);
-
-                    // mip 1~max
-                    for (var i = 1; i < MipCount; i++)
+                    Graphics.Blit(cameraDepthTexture, _depthRenderTexture);
+                        
+                    float w = _width;
+                    float h = _height;
+                    for (var i = 1; i < DepthTextureMip; i++)
                     {
-                        cmd.SetGlobalFloat(HiZBufferFromMiplevelID, i - 1);
-                        cmd.SetGlobalFloat(HiZBufferToMiplevelID, i);
-                        var descriptor = _hiZBufferDescriptors[i - 1];
-                        cmd.SetGlobalVector(SourceSizeID,
-                            new Vector4(descriptor.width, descriptor.height, 1.0f / descriptor.width, 1.0f / descriptor.height));
-                        Blitter.BlitCameraTexture(cmd, _hiZBufferTextures[i - 1], _hiZBufferTextures[i], _material, 0);
-
-                        cmd.CopyTexture(_hiZBufferTextures[i], 0, 0, _hiZBufferTexture, 0, i);
+                        w = MathF.Max(w / 2, 1);
+                        h = MathF.Max(h / 2, 1);
+                        
+                        cmd.SetComputeTextureParam(_generateMipmap, _genMipmapKernel, SourceTexID, _depthRenderTexture, i - 1);
+                        cmd.SetComputeTextureParam(_generateMipmap, _genMipmapKernel, DestTexId, _depthRenderTexture, i);
+                        cmd.SetComputeVectorParam(_generateMipmap,  DepthTexSizeId, new Vector4(w, h, 1f / w, 1f / h));
+                        
+                        cmd.DispatchCompute(_generateMipmap, 0, Mathf.CeilToInt(w / 8f), Mathf.CeilToInt(h / 8f), 1);
                     }
 
                     // set global hiz texture
-                    cmd.SetGlobalFloat(MaxHiZBufferTextureipLevelID, MipCount - 1);
-                    cmd.SetGlobalTexture(HiZBufferTextureID, _hiZBufferTexture);
+                    cmd.SetGlobalFloat(MaxHiZBufferTextureipLevelID, DepthTextureMip - 1);
+                    cmd.SetGlobalTexture(HiZBufferTextureID, _depthRenderTexture);
                 }
 
                 context.ExecuteCommandBuffer(cmd);
                 CommandBufferPool.Release(cmd);
             }
 
-            public bool Setup(Material material)
+            public bool Setup(ComputeShader shader)
             {
-                _material = material;
-                ConfigureInput(ScriptableRenderPassInput.Normal);
+                _generateMipmap = shader;
+                ConfigureInput(ScriptableRenderPassInput.Depth);
+                _genMipmapKernel = _generateMipmap.FindKernel("GenerateMipmap");
 
-                _hiZBufferDescriptors = new RenderTextureDescriptor[MipCount];
-                _hiZBufferTextures = new RTHandle[MipCount];
-                return _material != null;
+                return _generateMipmap != null;
             }
 
             public void Dispose()
             {
-                _hiZBufferTexture?.Release();
-                _hiZBufferTexture = null;
-                if (_hiZBufferTextures == null)
-                    return;
-                for (var i = 0; i < MipCount; i++)
-                {
-                    _hiZBufferTextures[i]?.Release();
-                    _hiZBufferTextures[i] = null;
-                }
+                if (_depthRenderTexture != null)
+                    _depthRenderTexture.Release();
+                _depthRenderTexture = null;
+                _width = 0;
+                _height = 0;
             }
         }
     }

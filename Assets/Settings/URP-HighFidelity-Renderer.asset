@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: eb71697e8a67b634c87c25a3fee3f32a, type: 3}
   m_Name: DepthTextureGeneratorRendererFeature
   m_EditorClassIdentifier: 
-  m_Active: 1
+  m_Active: 0
   GenerateMipmap: {fileID: 7200000, guid: b02cc51eba6a7134da482ce8736088cf, type: 3}
 --- !u!114 &-1878332245247344467
 MonoBehaviour:
@@ -63,7 +63,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   m_Active: 0
   SSRShader: {fileID: 4800000, guid: b854b25ad9544ac4aa246cc728c15058, type: 3}
-  HiZShader: {fileID: 4800000, guid: 69099d09202e1e045a4402a68235288a, type: 3}
+  HiZShader: {fileID: 7200000, guid: b02cc51eba6a7134da482ce8736088cf, type: 3}
 --- !u!114 &11400000
 MonoBehaviour:
   m_ObjectHideFlags: 0
