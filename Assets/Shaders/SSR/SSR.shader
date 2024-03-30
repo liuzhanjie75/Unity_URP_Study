@@ -32,8 +32,6 @@ Shader "Hidden/SSR"
             0.937, 0.437, 0.812, 0.312
         };
 
-        //float intensity = _SSRParams1.y;
-
         void swap(inout float v0, inout float v1)
         {
             float temp = v0;
@@ -433,10 +431,11 @@ Shader "Hidden/SSR"
 
             float4 CombineColor(Varyings input) : SV_Target
             {
+                float intensity = _SSRParams1.y;
                 float4 color = GetSource(input.texcoord);
                 float4 camera_color = SAMPLE_TEXTURE2D_X(_CameraColorTexture, sampler_CameraColorTexture,
                                                          input.texcoord);
-                return float4(camera_color.rgb + color.rgb, 1.0f);
+                return float4(camera_color.rgb + color.rgb * intensity, 1.0f);
             }
             ENDHLSL
         }
