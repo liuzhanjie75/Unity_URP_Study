@@ -62,6 +62,16 @@ MonoBehaviour:
   m_Name: SSRRendererFeature
   m_EditorClassIdentifier: 
   m_Active: 0
+  Settings:
+    blendMode: 0
+    Intensity: 0.8
+    MaxDistance: 10
+    Thickness: 0.5
+    BlurRadius: 1
+    Stride: 30
+    StepCount: 12
+    BinaryCount: 6
+    JitterDither: 0
   SSRShader: {fileID: 4800000, guid: b854b25ad9544ac4aa246cc728c15058, type: 3}
   HiZShader: {fileID: 7200000, guid: b02cc51eba6a7134da482ce8736088cf, type: 3}
 --- !u!114 &11400000

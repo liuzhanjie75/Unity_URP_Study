@@ -5,30 +5,30 @@ using UnityEngine.Rendering.Universal;
 
 namespace SSR
 {
-    [SerializeField]
-    public enum BlendMode
-    {
-        Addtive,
-        Balance
-    }
-
-    [SerializeField]
-    internal class SSRSettings
-    {
-        [SerializeField] internal BlendMode blendMode = BlendMode.Addtive;
-        [SerializeField] internal float Intensity = 0.8f;
-        [SerializeField] internal float MaxDistance = 10f;
-        [SerializeField] internal float Thickness = 0.5f;
-        [SerializeField] internal float BlurRadius = 1f;
-        [SerializeField] internal int Stride = 30;
-        [SerializeField] internal int StepCount = 12;
-        [SerializeField] internal int BinaryCount = 6;
-        [SerializeField] internal bool JitterDither = true;
-    }
-
-
     public class SSRRendererFeature : ScriptableRendererFeature
     {
+        [Serializable]
+        public enum BlendMode
+        {
+            Addtive,
+            Balance
+        }
+
+        [Serializable]
+        public class SSRSettings
+        {
+            [SerializeField] internal BlendMode blendMode = BlendMode.Addtive;
+            [SerializeField] internal float Intensity = 0.8f;
+            [SerializeField] internal float MaxDistance = 10f;
+            [SerializeField] internal float Thickness = 0.5f;
+            [SerializeField] internal float BlurRadius = 1f;
+            [SerializeField] internal int Stride = 30;
+            [SerializeField] internal int StepCount = 12;
+            [SerializeField] internal int BinaryCount = 6;
+            [SerializeField] internal bool JitterDither = true;
+        }
+
+
         [SerializeField] private SSRSettings Settings = new();
         public Shader SSRShader;
         public ComputeShader HiZShader;
@@ -43,6 +43,7 @@ namespace SSR
             {
                 renderPassEvent = RenderPassEvent.AfterRenderingOpaques
             };
+            
 
             _hizPass ??= new HierarchicalZBufferPass()
             {
@@ -54,18 +55,14 @@ namespace SSR
         {
             if (!renderingData.cameraData.postProcessEnabled)
                 return;
-            if (!GetMaterials())
-            {
-                Debug.LogErrorFormat("{0}.AddRenderPasses(): Missing material. {1} render pass will not be added.",
-                    GetType().Name, name);
-                return;
-            }
+
 
             if (_hizPass.Setup(HiZShader))
                 renderer.EnqueuePass(_hizPass);
 
-            if (_renderPass.Setup(ref Settings, _material))
+            if (_renderPass.Setup(ref Settings, SSRShader))
                 renderer.EnqueuePass(_renderPass);
+
         }
 
         protected override void Dispose(bool disposing)
@@ -77,12 +74,7 @@ namespace SSR
             _renderPass = null;
             _hizPass = null;
         }
-
-        private bool GetMaterials()
-        {
-            _material ??= CoreUtils.CreateEngineMaterial(SSRShader);
-            return _material != null;
-        }
+        
 
         private class SSRRenderPass : ScriptableRenderPass
         {
@@ -101,6 +93,7 @@ namespace SSR
             private RenderTextureDescriptor _textureDescriptor;
             private RTHandle _sourceRTHandle;
             private RTHandle _destinationRTHandle;
+            private RTHandle _originRTHandle;
             private RTHandle _ssrTexture0;
             private RTHandle _ssrTexture1;
             private const string SsrTextureName0 = "SSRTexture0";
@@ -110,9 +103,12 @@ namespace SSR
             private static readonly int CameraViewXExtentID = Shader.PropertyToID("_CameraViewXExtent");
             private static readonly int CameraViewYExtentID = Shader.PropertyToID("_CameraViewYExtent");
             private static readonly int SourceSizeID = Shader.PropertyToID("_SourceSize");
+            private const string OriginTextureName = "OriginTexture";
+
             private static readonly int SSRParams0ID = Shader.PropertyToID("_SSRParams0");
             private static readonly int SSRParams1ID = Shader.PropertyToID("_SSRParams1");
             private static readonly int BlurRadiusID = Shader.PropertyToID("_SSRBlurRadius");
+            private static readonly int CameraColorTexture = Shader.PropertyToID("_CameraColorTexture");
 
             private const string JitterKeyword = "_JITTER_ON";
 
@@ -175,6 +171,7 @@ namespace SSR
                 _textureDescriptor.depthBufferBits = 0;
                 RenderingUtils.ReAllocateIfNeeded(ref _ssrTexture0, _textureDescriptor, name: SsrTextureName0);
                 RenderingUtils.ReAllocateIfNeeded(ref _ssrTexture1, _textureDescriptor, name: SsrTextureName1);
+                RenderingUtils.ReAllocateIfNeeded(ref _originRTHandle, _textureDescriptor, name: OriginTextureName);
 
                 ConfigureTarget(renderer.cameraColorTargetHandle);
                 ConfigureClear(ClearFlag.None, Color.white);
@@ -208,6 +205,8 @@ namespace SSR
 
                 using (new ProfilingScope(cmd, _profilingSampler))
                 {
+                    Blitter.BlitCameraTexture(cmd,_sourceRTHandle, _originRTHandle);
+                    _material.SetTexture(CameraColorTexture, _originRTHandle);
                     // SSR
                     Blitter.BlitCameraTexture(cmd, _sourceRTHandle, _ssrTexture0, _material,
                         (int)ShaderPass.Raymarching);
@@ -221,20 +220,18 @@ namespace SSR
                     Blitter.BlitCameraTexture(cmd, _ssrTexture1, _ssrTexture0, _material, (int)ShaderPass.Blur);
 
                     // Additive Pass
-                    Blitter.BlitCameraTexture(cmd, _ssrTexture0, _destinationRTHandle, _material
-                        , _ssrSettings.blendMode == BlendMode.Addtive ? (int)ShaderPass.Addtive : (int)ShaderPass.Balance);
+                    Blitter.BlitCameraTexture(cmd, _ssrTexture0, _destinationRTHandle, _material, (int)ShaderPass.Addtive);
 
-                    //Blitter.BlitCameraTexture(cmd, _ssrTexture0, _destinationRTHandle);
                 }
 
                 context.ExecuteCommandBuffer(cmd);
                 CommandBufferPool.Release(cmd);
             }
 
-            internal bool Setup(ref SSRSettings ssrSettings, Material material)
+            internal bool Setup(ref SSRSettings ssrSettings, Shader SSRShader)
             {
                 _ssrSettings = ssrSettings;
-                _material = material;
+                _material = CoreUtils.CreateEngineMaterial(SSRShader);
 
                 ConfigureInput(ScriptableRenderPassInput.Normal);
 
@@ -362,4 +359,5 @@ namespace SSR
             }
         }
     }
+    
 }

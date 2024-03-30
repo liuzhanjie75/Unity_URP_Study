@@ -13,12 +13,16 @@ Shader "Hidden/SSR"
         #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareDepthTexture.hlsl"
         #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareNormalsTexture.hlsl"
         #include "Packages/com.unity.render-pipelines.core/Runtime/Utilities/Blit.hlsl"
-
+        
+        #pragma multi_compile _ _JITTER_ON
+        
         float4 _ProjectionParams2;
         float4 _CameraViewTopLeftCorner;
         float4 _CameraViewXExtent;
         float4 _CameraViewYExtent;
         float4 _SourceSize;
+        float4 _SSRParams0;
+        float4 _SSRParams1;
 
         // jitter dither map
         static half dither[16] = {
@@ -28,12 +32,7 @@ Shader "Hidden/SSR"
             0.937, 0.437, 0.812, 0.312
         };
 
-        #define MAXDISTANCE 10
-        #define STRIDE 8
-        #define STEP_COUNT 70
-        #define BINARY_COUNT 6
-        // 能反射和不可能的反射之间的界限  
-        #define THICKNESS 0.5
+        //float intensity = _SSRParams1.y;
 
         void swap(inout float v0, inout float v1)
         {
@@ -42,7 +41,7 @@ Shader "Hidden/SSR"
             v1 = temp;
         }
 
-        float4 GetSource(half2 uv)
+        float4 GetSource(float2 uv)
         {
             return SAMPLE_TEXTURE2D_X_LOD(_BlitTexture, sampler_LinearRepeat, uv, _BlitMipLevel);
         }
@@ -99,8 +98,9 @@ Shader "Hidden/SSR"
             float rayZMax = rayZ;
             float preZ = rayZ;
 
+            int step_count = _SSRParams0.z;
             UNITY_LOOP
-            for (int i = 0; i < STEP_COUNT; ++i)
+            for (int i = 0; i < step_count; ++i)
             {
                 P += dp;
                 Q += dq;
@@ -130,7 +130,7 @@ Shader "Hidden/SSR"
 
         bool BinarySearchRaymarching(float3 startView, float3 rDir, inout float2 hitUV)
         {
-            float magnitude = MAXDISTANCE;
+            float magnitude = _SSRParams0.x; // max_distance
             float end = startView.z + rDir.z * magnitude;
             if (end > -_ProjectionParams.y)
                 magnitude = (-_ProjectionParams.y - startView.z) / rDir.z;
@@ -170,9 +170,10 @@ Shader "Hidden/SSR"
             float3 dq = (endQ - startQ) * invdx;
             float dk = (endk - startK) * invdx;
 
-            dp *= STRIDE;
-            dq *= STRIDE;
-            dk *= STRIDE;
+            float strid = _SSRParams0.y;
+            dp *= strid;
+            dq *= strid;
+            dk *= strid;
 
             // 缓存当前的深度和位置
             float rayZ = startView.z;
@@ -181,19 +182,25 @@ Shader "Hidden/SSR"
             float3 Q = startQ;
             float K = startK;
 
+            
+            int binary_count = _SSRParams1.x;
+            float thickness = _SSRParams0.w;
             float depthDistance = 0.0;
             UNITY_LOOP
-            for (int i = 0; i < BINARY_COUNT; i++)
+            for (int i = 0; i < binary_count; i++)
             {
+                #ifdef  _JITTER_ON
                 float2 ditherUV = fmod(P, 4);
                 float jitter = dither[ditherUV.x * 4 + ditherUV.y];
                 P += dp * jitter;
                 Q += dq * jitter;
                 K += dk * jitter;
+                #endif
+                
                 if (ScreenSpaceRayMarching(P, Q, K, dp, dq, dk, rayZ, permute, depthDistance, hitUV))
                 {
 
-                    if (depthDistance < THICKNESS)
+                    if (depthDistance < thickness)
                         return true;
                     P -= dp;
                     Q -= dq;
@@ -219,7 +226,7 @@ Shader "Hidden/SSR"
 
         bool HierarchicalZScreenSpaceRayMarching(float3 startView, float3 rDir, inout float2 hitUV)
         {
-            float magnitude = MAXDISTANCE;
+            float magnitude = _SSRParams0.x; // max_distance
             float end = startView.z + rDir.z * magnitude;
             if (end > -_ProjectionParams.y)
                 magnitude = (-_ProjectionParams.y - startView.z) / rDir.z;
@@ -259,9 +266,10 @@ Shader "Hidden/SSR"
             float3 dq = (endQ - startQ) * invdx;
             float dk = (endk - startK) * invdx;
 
-            dp *= STRIDE;
-            dq *= STRIDE;
-            dk *= STRIDE;
+            float strid = _SSRParams0.y;
+            dp *= strid;
+            dq *= strid;
+            dk *= strid;
 
             // 缓存当前的深度和位置
             float rayZMin = startView.z;
@@ -272,9 +280,11 @@ Shader "Hidden/SSR"
             float3 Q = startQ;
             float K = startK;
 
+            float thickness = _SSRParams0.w;
+            int step_count = _SSRParams0.z;
             float mipLevel = 0.0;
             UNITY_LOOP
-            for (int i = 0; i < STEP_COUNT; i++)
+            for (int i = 0; i < step_count; i++)
             {
                 // 步近
                 P += dp * exp2(mipLevel);
@@ -309,7 +319,7 @@ Shader "Hidden/SSR"
                 {
                     if (mipLevel == 0)
                     {
-                        if (abs(surfaceDepth - rayZMax) < THICKNESS)
+                        if (abs(surfaceDepth - rayZMax) < thickness)
                         {
                             //return float4(hitUV, rayZMin, 1.0);
                             return true;
@@ -358,14 +368,13 @@ Shader "Hidden/SSR"
                 float3 startView = TransformWorldToView(wpos);
                 float2 hitUV = input.texcoord;
                 if (BinarySearchRaymarching(startView, rDir, hitUV))
-                    return GetSource(hitUV) + GetSource(input.texcoord);
-                else
                     return GetSource(hitUV);
+                    
 
                 // if (HierarchicalZScreenSpaceRayMarching(startView, rDir, hitUV))
-                //     return GetSource(hitUV) + GetSource(input.texcoord);
-                // else
                 //     return GetSource(hitUV);
+
+                return float4(0, 0, 0, 0);
 
             }
            ENDHLSL
@@ -419,28 +428,18 @@ Shader "Hidden/SSR"
             #pragma vertex Vert
             #pragma fragment SSRFinalPassFragment
 
-            // float4 FragAddtive(Varyings input) : SV_Target
-            // {
-            //     return 0;
-            // }
-            ENDHLSL
-        }
-        Pass
-        {
-            Name "SSR Balance"
-            ZTest NotEqual
-            ZWrite Off
-            Cull Off
-            Blend SrcColor OneMinusSrcColor, One Zero
+            TEXTURE2D_X_FLOAT(_CameraColorTexture);
+            SAMPLER(sampler_CameraColorTexture);
 
-            HLSLPROGRAM
-            #pragma vertex Vert
-            #pragma fragment SSRFinalPassFragment
-            // float4 FragBalance(Varyings input) : SV_Target
-            // {
-            //     return 0;
-            // }
+            float4 CombineColor(Varyings input) : SV_Target
+            {
+                float4 color = GetSource(input.texcoord);
+                float4 camera_color = SAMPLE_TEXTURE2D_X(_CameraColorTexture, sampler_CameraColorTexture,
+                                                         input.texcoord);
+                return float4(camera_color.rgb + color.rgb, 1.0f);
+            }
             ENDHLSL
         }
+
     }
 }
