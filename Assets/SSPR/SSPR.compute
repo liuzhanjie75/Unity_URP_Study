@@ -7,14 +7,15 @@ RWTexture2D<half4> _SSPRReflectionTexture;
 Texture2D<float4> _CameraColorTexture;
 Texture2D<float4> _CameraDepthTexture;
 
-SAMPLER(sampler_CameraDepthTexture);  
+SAMPLER(sampler_CameraDepthTexture);
 SAMPLER(sampler_CameraColorTexture);
 
 float4 _SSPRReflectionSize;
 float _ReflectPlaneHeight;
 
 [numthreads(8,8,1)]
-void SSPR(uint3 id : SV_DispatchThreadID) {
+void SSPR(uint3 id : SV_DispatchThreadID)
+{
     _SSPRReflectionTexture[id.xy] = half4(0.0, 0.0, 0.0, 0.0);
     // 计算屏幕uv DispatchThreadID：当前线程组在所有线程组里的ID，即图像pos
     float2 uv = id.xy * _SSPRReflectionSize.zw;
@@ -37,7 +38,7 @@ void SSPR(uint3 id : SV_DispatchThreadID) {
     // 计算反射后的索引
     float2 ridx = ruv * _SSPRReflectionSize.xy;
 
-    half4 col = _CameraColorTexture.SampleLevel(sampler_CameraColorTexture, uv, 0);
+    half4 color = _CameraColorTexture.SampleLevel(sampler_CameraColorTexture, uv, 0);
 
-    _SSPRReflectionTexture[ridx] = col;
+    _SSPRReflectionTexture[ridx] = color;
 }
