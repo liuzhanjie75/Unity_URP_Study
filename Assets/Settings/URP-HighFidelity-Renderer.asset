@@ -14,6 +14,26 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   m_Active: 0
   GenerateMipmap: {fileID: 7200000, guid: b02cc51eba6a7134da482ce8736088cf, type: 3}
+--- !u!114 &-4880035320649585623
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8d362b13513aafa418278a22e1f37d25, type: 3}
+  m_Name: SSPRRendererFeature
+  m_EditorClassIdentifier: 
+  m_Active: 1
+  setting:
+    RTSize: 512
+    ReflectHeight: 0.2
+    StretchIntensity: 0.1
+    StretchThreshold: 0.3
+    EdgeFadeOut: 0.6
+  ssprComputeShader: {fileID: 7200000, guid: 05d7c82f9fc041a44bc0cc211b24eae1, type: 3}
 --- !u!114 &-1878332245247344467
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -109,7 +129,8 @@ MonoBehaviour:
   - {fileID: -1878332245247344467}
   - {fileID: -1324597791681856267}
   - {fileID: -6551216523599148224}
-  m_RendererFeatureMap: adc0de57c6d2eee5f53c899453159eed400b3418486715a5
+  - {fileID: -4880035320649585623}
+  m_RendererFeatureMap: adc0de57c6d2eee5f53c899453159eed400b3418486715a5296c523dbba146bc
   m_UseNativeRenderPass: 0
   postProcessData: {fileID: 11400000, guid: 41439944d30ece34e96484bdb6645b55, type: 2}
   xrSystemData: {fileID: 11400000, guid: 60e1133243b97e347b653163a8c01b64, type: 2}
