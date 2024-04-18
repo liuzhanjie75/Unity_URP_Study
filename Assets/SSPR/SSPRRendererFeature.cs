@@ -68,7 +68,7 @@ namespace SSPR
             _cameraColorTexture = renderer.cameraColorTargetHandle;
             _cameraDepthTexture = renderer.cameraDepthTargetHandle;
 
-            float aspect = (float)Screen.height / Screen.width;
+            var aspect = (float)Screen.height / Screen.width;
             // 计算线程组数量
             _setting.GroupThreadX = 8;
             _setting.GroupThreadY = 8;
@@ -76,25 +76,27 @@ namespace SSPR
             _setting.GroupY = Mathf.RoundToInt((float)_setting.RTSize / _setting.GroupThreadY);
             _setting.GroupX = Mathf.RoundToInt(_setting.GroupY / aspect);
 
-            // 分配RTHandle
+            // 分配 RTHandle
             _ssprReflectionDescriptor = new RenderTextureDescriptor(_setting.GroupThreadX * _setting.GroupX,
-                _setting.GroupThreadY * _setting.GroupY, RenderTextureFormat.BGRA32, 0, 0);
-            _ssprReflectionDescriptor.enableRandomWrite = true; // 开启UAV随机读写
+                _setting.GroupThreadY * _setting.GroupY, RenderTextureFormat.BGRA32, 0, 0)
+            {
+                enableRandomWrite = true // 开启UAV随机读写
+            };
             RenderingUtils.ReAllocateIfNeeded(ref _ssprReflectionTexture, _ssprReflectionDescriptor,
                 FilterMode.Bilinear, TextureWrapMode.Clamp, name: SSPRReflectionTextureName);
 
-            // 只要r channel
+            // 只要 R channel
             _ssprReflectionDescriptor.colorFormat = RenderTextureFormat.RFloat;
             RenderingUtils.ReAllocateIfNeeded(ref _ssprHeightTexture, _ssprReflectionDescriptor, FilterMode.Bilinear,
                 TextureWrapMode.Clamp, name: SSPRHeightTextureName);
 
-            // 设置ComputeShader属性
+            // 设置 ComputeShader 属性
             _ssprKernelId = _computeShader.FindKernel(SSPRKernelName);
 
             _computeShader.SetFloat(ReflectPlaneHeihgtID, _setting.ReflectHeight);
             _computeShader.SetVector(RTSizeID,
                 new Vector4(_ssprReflectionDescriptor.width, _ssprReflectionDescriptor.height,
-                    1.0f / (float)_ssprReflectionDescriptor.width, 1.0f / (float)_ssprReflectionDescriptor.height));
+                    1.0f / _ssprReflectionDescriptor.width, 1.0f / _ssprReflectionDescriptor.height));
             _computeShader.SetTexture(_ssprKernelId, SSPRReflectionTextureID, _ssprReflectionTexture);
             _computeShader.SetTexture(_ssprKernelId, SSPRHeightBufferID, _ssprHeightTexture);
             _computeShader.SetTexture(_ssprKernelId, CameraColorTextureID, _cameraColorTexture);
@@ -104,8 +106,8 @@ namespace SSPR
                 new Vector4(_setting.StretchIntensity, _setting.StretchThreshold, 0.0f, 0.0f));
             _computeShader.SetFloat(EdgeFadeOutID, _setting.EdgeFadeOut);
 
-            // _fillHoleKernelId = _computeShader.FindKernel(FillHoleKernelName);
-            // _computeShader.SetTexture(_fillHoleKernelId, SSPRReflectionTextureID, _ssprReflectionTexture);
+            _fillHoleKernelId = _computeShader.FindKernel(FillHoleKernelName);
+            _computeShader.SetTexture(_fillHoleKernelId, SSPRReflectionTextureID, _ssprReflectionTexture);
         }
 
         public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
@@ -126,7 +128,7 @@ namespace SSPR
             {
                 // Dispatch ComputeShader
                 cmd.DispatchCompute(_computeShader, _ssprKernelId, _setting.GroupX, _setting.GroupY, 1);
-                //cmd.DispatchCompute(_computeShader, _fillHoleKernelId, _setting.GroupX / 2, _setting.GroupY / 2, 1);
+                cmd.DispatchCompute(_computeShader, _fillHoleKernelId, _setting.GroupX / 2, _setting.GroupY / 2, 1);
 
                 // 设置全局数据，让反射物采样
                 cmd.SetGlobalTexture(SSPRReflectionTextureID, _ssprReflectionTexture);

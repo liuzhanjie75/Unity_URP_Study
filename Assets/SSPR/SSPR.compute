@@ -3,6 +3,7 @@
 #pragma kernel SSPR
 
 RWTexture2D<half4> _SSPRReflectionTexture;
+RWTexture2D<float> _SSPRHeightBuffer;
 
 Texture2D<float4> _CameraColorTexture;
 Texture2D<float4> _CameraDepthTexture;
@@ -11,34 +12,98 @@ SAMPLER(sampler_CameraDepthTexture);
 SAMPLER(sampler_CameraColorTexture);
 
 float4 _SSPRReflectionSize;
+float4 _StretchParams;
+float4 _CameraDirection;
 float _ReflectPlaneHeight;
+float _EdgeFadeOut;
+
+float SdfCube(float2 pos)
+{
+    float2 dis = abs(pos) - float2(1, 1);
+    return length(max(dis, 0.0)) - min(max(dis.x, dis.y), 0.0);
+}
 
 [numthreads(8,8,1)]
 void SSPR(uint3 id : SV_DispatchThreadID)
 {
     _SSPRReflectionTexture[id.xy] = half4(0.0, 0.0, 0.0, 0.0);
-    // 计算屏幕uv DispatchThreadID：当前线程组在所有线程组里的ID，即图像pos
+    _SSPRHeightBuffer[id.xy] = HALF_MAX;
+    
+    // 计算屏幕 uv DispatchThreadID：当前线程组在所有线程组里的ID，即图像pos
     float2 uv = id.xy * _SSPRReflectionSize.zw;
     float depth = _CameraDepthTexture.SampleLevel(sampler_CameraDepthTexture, uv, 0).r;
-
+    float linearDepth = Linear01Depth(depth, _ZBufferParams);
+    if(linearDepth > 0.99) // 跳过天空盒
+        return;
+    
     // 根据深度还原世界坐标
     float3 wpos = ComputeWorldSpacePosition(uv, depth, UNITY_MATRIX_I_VP);
     // 舍去那些在平面下方的像素
-    if (wpos.y < _ReflectPlaneHeight) return;
+    if (wpos.y < _ReflectPlaneHeight)
+        return;
 
     // 计算反射后的世界坐标
     float3 rwpos = wpos;
     rwpos.y = -rwpos.y + 2 * _ReflectPlaneHeight;
 
-    // 计算反射后的uv
+    // 计算反射后的 uv
     float4 rcpos = TransformWorldToHClip(rwpos);
     float2 ruv = float2(rcpos.x, rcpos.y * _ProjectionParams.x) * rcp(rcpos.w) * 0.5 + 0.5;
-    if (any(ruv) < 0.0 || any(ruv) > 1.0) return;
+    if (any(ruv) < 0.0 || any(ruv) > 1.0)
+        return;
+
+    // // 像素距离水面越高越往屏幕两边拖拽
+    // float HeightStretch = abs(rwpos.y - _ReflectPlaneHeight);
+    // // 把屏幕对称操作，然后在屏幕两边一定内做固定
+    // float ScreenStretch = saturate(abs(ruv.x * 2.0 - 1.0) - _StretchParams.y);
+    // // 如果水平角度看水面，则没有像素拉伸的操作，角度越大越强
+    // float AngleStretch = saturate(-_CameraDirection.z);
+    // // remap to [-1, 1]
+    // ruv.x = ruv.x * 2.0 - 1.0;
+    // // stretch
+    // ruv.x *= 1 + saturate(1 - abs(HeightStretch * AngleStretch * ScreenStretch)) * _StretchParams.y;
+    // // remap to [0, 1]
+    // ruv.x = saturate(ruv.x * 0.5 + 0.5);
 
     // 计算反射后的索引
     float2 ridx = ruv * _SSPRReflectionSize.xy;
+    // 深度测试 写入更低的颜色
+    if (wpos.y > _SSPRHeightBuffer[ridx])
+        return;
 
-    half4 color = _CameraColorTexture.SampleLevel(sampler_CameraColorTexture, uv, 0);
-
+    float mask = SdfCube(uv * 2.0 - 1.0);
+    mask = Smootherstep(0, _EdgeFadeOut, abs(mask));
+    
+    // 写入深度和颜色
+    _SSPRHeightBuffer[ridx] = wpos.y;
+    float4 color = _CameraColorTexture.SampleLevel(sampler_CameraColorTexture, uv, 0);
+    color.a = mask;
     _SSPRReflectionTexture[ridx] = color;
+}
+
+
+#pragma kernel FillHole
+[numthreads(8,8,1)]
+void FillHole(uint3 id : SV_DispatchThreadID)
+{
+    // fill holes inside each 2*2
+    id.xy *= 2;
+
+    // cache read
+    half4 center = _SSPRReflectionTexture[id.xy + uint2(0, 0)];
+    half4 right = _SSPRReflectionTexture[id.xy + uint2(0, 1)];
+    half4 bottom = _SSPRReflectionTexture[id.xy + uint2(1, 0)];
+    half4 bottomRight = _SSPRReflectionTexture[id.xy + uint2(1, 1)];
+
+    // find best inside 2*2
+    half4 best = center;
+    best = right.a > best.a + 0.5 ? right : best;
+    best = bottom.a > best.a + 0.5 ? bottom : best;
+    best = bottomRight.a > best.a + 0.5 ? bottomRight : best;
+
+    // write better rgba
+    _SSPRReflectionTexture[id.xy + uint2(0, 0)] = best.a > center.a + 0.5 ? best : center;
+    _SSPRReflectionTexture[id.xy + uint2(0, 1)] = best.a > right.a + 0.5 ? best : right;
+    _SSPRReflectionTexture[id.xy + uint2(1, 0)] = best.a > bottom.a + 0.5 ? best : bottom;
+    _SSPRReflectionTexture[id.xy + uint2(1, 1)] = best.a > bottomRight.a + 0.5 ? best : bottomRight;
 }
