@@ -30,7 +30,7 @@ Shader "SSPR/SSPRGround"
         #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
 
         //textures         
-        TEXTURE2D(_MobileSSPR_ColorRT);
+        TEXTURE2D(_ColorRT);
         sampler LinearClampSampler;
 
         struct ReflectionInput
