@@ -1,5 +1,32 @@
 %YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
+--- !u!114 &-7312148363778212142
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c2278f90d37f3d84c940cc69da8f3507, type: 3}
+  m_Name: MobileSSPRRendererFeature
+  m_EditorClassIdentifier: 
+  m_Active: 0
+  setting:
+    ShouldRenderSSPR: 1
+    HorizontalReflectionPlaneHeightWS: 0.01
+    FadeOutScreenBorderWithVerticle: 0.25
+    FadeOutScreenBorderWithHorizontal: 0.35
+    ScreenLRStretchIntensity: 4
+    ScreenLRStretchThreshold: 0.7
+    TintColor: {r: 1, g: 1, b: 1, a: 1}
+    RT_height: 512
+    UseHDR: 1
+    ApplyFillHoleFix: 1
+    ShouldRemoveFlickerFinalControl: 1
+    EnablePerPlatformAutoSafeGuard: 1
+  computeShader: {fileID: 7200000, guid: 5a5e7720640dd8c4e88afc7bbafaef19, type: 3}
 --- !u!114 &-6551216523599148224
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -26,7 +53,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8d362b13513aafa418278a22e1f37d25, type: 3}
   m_Name: SSPRRendererFeature
   m_EditorClassIdentifier: 
-  m_Active: 1
+  m_Active: 0
   setting:
     RTSize: 512
     ReflectHeight: 0.2
@@ -130,7 +157,8 @@ MonoBehaviour:
   - {fileID: -1324597791681856267}
   - {fileID: -6551216523599148224}
   - {fileID: -4880035320649585623}
-  m_RendererFeatureMap: adc0de57c6d2eee5f53c899453159eed400b3418486715a5296c523dbba146bc
+  - {fileID: -7312148363778212142}
+  m_RendererFeatureMap: adc0de57c6d2eee5f53c899453159eed400b3418486715a5296c523dbba146bcd2be0bf8cd07869a
   m_UseNativeRenderPass: 0
   postProcessData: {fileID: 11400000, guid: 41439944d30ece34e96484bdb6645b55, type: 2}
   xrSystemData: {fileID: 11400000, guid: 60e1133243b97e347b653163a8c01b64, type: 2}
